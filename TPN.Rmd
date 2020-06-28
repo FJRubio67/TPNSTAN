@@ -1,0 +1,234 @@
+---
+title: "Bayesian inference on the two-piece normal distribution using rstan"
+author: '[F. Javier Rubio](https://sites.google.com/site/fjavierrubio67)'
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    toc: true
+    toc_float: true
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# The two-piece normal distribution
+The two-piece normal, binormal, split normal, or asymmetric normal [@wallis:2014], is obtained by continuously joining two half-normal densities with different scale parameters but with the same location parameter:
+$$s(x \mid \mu, \sigma_1, \sigma_2) = \dfrac{2}{\sigma_1 + \sigma_2} \left[\phi\left(\dfrac{x-\mu}{\sigma_1}\right)I(x<\mu) + \phi\left(\dfrac{x-\mu}{\sigma_2}\right)I(x\geq\mu)\right],$$
+where $\phi(x) = \dfrac{1}{\sqrt{2\pi}}\exp\left(-\dfrac{x^2}{2}\right)$. This distribution has a peculiar history as it has been re-invented several times, under different levels of generality, and different parameterisations [@rubio:2020; @wallis:2014]. The two-piece normal density is unimodal by construction, it is continuous, and differentiable everywhere. However, it is not twice differentiable at the mode. Simulating from the two-piece normal distribution is easy using the `twopiece` [R package](https://rpubs.com/FJRubio/twopiece), as illustrated in our first example. The two-piece normal is a member of the larger family of two-piece distributions [@rubio:2020].
+
+The two-piece normal distribution has been applied in many areas such as finance, medicine, economy, psychology, and etcetera [@rubio:2020]. See [The Two Piece Normal Distribution
+](https://quantgirl.blog/two-piece-normal/) and [Fan Charts](https://quantgirl.blog/fan-charts/) for applications in finance.
+
+# Bayesian inference using rstan
+
+@rubio:2014 studied different types of priors for two-piece distributions. For illustrative purposes, we will adopt the following priors for the parameters $(\mu,\sigma_1,\sigma_2)$:
+
+\begin{align}
+\mu &\sim N(0,100),\\
+\sigma_1 &\sim InvGamma(0.01,0.01),\\
+\sigma_2 &\sim InvGamma(0.01,0.01).
+\end{align}
+
+Next, we present two illustrative examples. Example 1 describes how to simulate from the two-piece normal distribution using the `twopiece` R package, how to sample from the posterior distribution of $(\mu,\sigma_1,\sigma_2)$ using `rstan`, and how to calculate the posterior predictive distribution. Example 2 presents a real data application. The `rstan` code used in both examples can be found at the end of this document. 
+
+# Example 1: Simulated data
+```{r message=FALSE}
+rm(list=ls())
+#------------------------------------------------
+# Data simulation
+#------------------------------------------------
+# install.packages("devtools")
+#devtools::install_github("medewitt/twopiece")
+library(twopiece)
+
+N <- 1000 # Sample size
+set.seed(123) # Seed
+# Simulated sample from a twopiece normal using the twopiece parameterisation
+y <- rtp3(N,10,3,1,FUN=rnorm,param="tp")
+
+# Data list
+datasim <- list(y = y, N = N)
+
+#------------------------------------------------
+# Posterior simulation
+#------------------------------------------------
+library(rstan)
+
+fit1 <- stan(
+  file = "TPN.stan",  # Stan program
+  data = datasim,    # named list of data
+  chains = 1,             # number of Markov chains
+  warmup = 1000,          # number of warmup iterations per chain
+  iter = 11000,            # total number of iterations per chain
+  cores = 2,              # number of cores (could use one per chain)
+  refresh = 0             # no progress shown
+)
+
+# Trace plots and histograms (thinned samples)
+index = seq(1,10000, by = 5) # thinning index
+# thinned samples
+mup <- extract(fit1, "mu")$mu[index]
+sigma1p <- extract(fit1, "sigma1")$sigma1[index]
+sigma2p <- extract(fit1, "sigma2")$sigma2[index]
+
+# summaries
+summary(mup)
+summary(sigma1p)
+summary(sigma2p)
+
+# traceplots
+plot(mup, type="l", ylab = expression(mu), cex.axis = 1.5, cex.lab = 1.5)
+plot(sigma1p,type="l", ylab = expression(sigma[1]), cex.axis = 1.5, cex.lab = 1.5)
+plot(sigma2p,type="l", ylab = expression(sigma[2]), cex.axis = 1.5, cex.lab = 1.5)
+
+# histograms
+hist(mup, breaks = 30, probability = T, 
+     main = "", xlab = expression(mu), cex.axis = 1.5, cex.lab = 1.5)
+points(density(mup), type="l", col="red", lwd = 2)
+box()
+
+hist(sigma1p, breaks = 30, probability = T, 
+     main = "", xlab = expression(sigma[1]), cex.axis = 1.5, cex.lab = 1.5)
+points(density(sigma1p), type="l", col="red", lwd = 2)
+box()
+
+hist(sigma2p, breaks = 30, probability = T, 
+     main = "", xlab = expression(sigma[2]), cex.axis = 1.5, cex.lab = 1.5)
+points(density(sigma2p), type="l", col="red", lwd = 2)
+box()
+
+#------------------------------------------------
+# Posterior predictive density function
+#------------------------------------------------
+dpred <- Vectorize(function(x){
+  val <- vector()
+  for(i in 1:length(index)) val[i] <- dtp3(x,mup[i],sigma1p[i],sigma2p[i], FUN=dnorm, param ="tp")
+  return(mean(val))
+})
+
+hist(y,probability = T, breaks = 20, xlim = c(0,15),
+     main="Predictive PDF", xlab = "y", cex.axis = 1.5, cex.lab = 1.5)
+curve(dpred, 0, 15, n = 250, add = T, col="red", lwd = 2 )
+box()
+```
+
+# Example 2: Real Data - Body Mass Index
+
+```{r message=FALSE}
+rm(list=ls())
+# Data: BMI of 100 female Australian athletes
+y <- c(20.56,20.67,21.86,21.88,18.96,21.04,21.69,20.62,22.64,19.44,25.75,21.20,22.03,25.44,22.63,
+       21.86,22.27,21.27,23.47,23.19, 23.17,24.54,22.96,19.76,23.36,22.67,24.24,24.21,20.46,20.81,
+       20.17,23.06,24.40,23.97,22.62,19.16,21.15,21.40,21.03,21.77,21.38,21.47,24.45,22.63,22.80,
+       23.58,20.06,23.01,24.64,18.26,24.47,23.99,26.24,20.04,25.72,25.64,19.87,23.35,22.42,20.42,
+       22.13,25.17,23.72,21.28,20.87,19.00,22.04,20.12,21.35,28.57,26.95,28.13,26.85,25.27,
+       31.93,16.75,19.54,20.42,22.76,20.12,22.35,19.16,20.77,19.37,22.37,17.54,19.06,20.30,20.15,
+       25.36,22.12,21.25,20.53,17.06,18.29,18.37,18.93,17.79,17.05,20.31)
+summary(y)
+N <- length(y)
+
+# Data list
+datasim <- list(y = y, N = N)
+
+#------------------------------------------------
+# Posterior simulation
+#------------------------------------------------
+library(rstan)
+
+fit1 <- stan(
+  file = "TPN.stan",  # Stan program
+  data = datasim,    # named list of data
+  chains = 1,             # number of Markov chains
+  warmup = 1000,          # number of warmup iterations per chain
+  iter = 11000,            # total number of iterations per chain
+  cores = 2,              # number of cores (could use one per chain)
+  refresh = 0             # no progress shown
+)
+
+# Trace plots and histograms (thinned samples)
+index = seq(1,10000, by = 5) # thinning index
+# thinned samples
+mup <- extract(fit1, "mu")$mu[index]
+sigma1p <- extract(fit1, "sigma1")$sigma1[index]
+sigma2p <- extract(fit1, "sigma2")$sigma2[index]
+
+# summaries
+summary(mup)
+summary(sigma1p)
+summary(sigma2p)
+
+# traceplots
+plot(mup, type="l", ylab = expression(mu), cex.axis = 1.5, cex.lab = 1.5)
+plot(sigma1p,type="l", ylab = expression(sigma[1]), cex.axis = 1.5, cex.lab = 1.5)
+plot(sigma2p,type="l", ylab = expression(sigma[2]), cex.axis = 1.5, cex.lab = 1.5)
+
+# histograms
+hist(mup, breaks = 30, probability = T, 
+     main = "", xlab = expression(mu), cex.axis = 1.5, cex.lab = 1.5)
+points(density(mup), type="l", col="red", lwd = 2)
+box()
+
+hist(sigma1p, breaks = 30, probability = T, 
+     main = "", xlab = expression(sigma[1]), cex.axis = 1.5, cex.lab = 1.5)
+points(density(sigma1p), type="l", col="red", lwd = 2)
+box()
+
+hist(sigma2p, breaks = 30, probability = T, 
+     main = "", xlab = expression(sigma[2]), cex.axis = 1.5, cex.lab = 1.5)
+points(density(sigma2p), type="l", col="red", lwd = 2)
+box()
+
+#------------------------------------------------
+# Posterior predictive density function
+#------------------------------------------------
+dpred <- Vectorize(function(x){
+  val <- vector()
+  for(i in 1:length(index)) val[i] <- dtp3(x,mup[i],sigma1p[i],sigma2p[i], FUN=dnorm, param ="tp")
+  return(mean(val))
+})
+
+hist(y, probability = T, breaks = 20, xlim = c(15,35),
+     main="Predictive PDF", xlab = "BMI", cex.axis = 1.5, cex.lab = 1.5)
+curve(dpred, 15, 35, n = 250, add = T, col="red", lwd = 2 )
+box()
+
+```
+
+# TPN.stan code
+
+```{r eval=FALSE}
+data {
+  int < lower = 1 > N; // Sample size
+  vector[N] y; // Sample
+}
+
+parameters {
+  real mu; // mean
+  real < lower = 0 > sigma1;
+  real < lower = 0 > sigma2;
+}
+
+model {
+  // Priors
+  target += normal_lpdf(mu | 0, 100);
+  target += inv_gamma_lpdf(sigma1 | 0.01, 0.01);
+  target += inv_gamma_lpdf(sigma2 | 0.01, 0.01);
+  // Likelihood
+  for(n in 1:N){
+    if(y[n] <  mu)
+    {
+      target += normal_lpdf( (y[n]-mu)/sigma1 | 0 , 1) + log(2) - log(sigma1 + sigma2);
+    }
+    if(y[n] >=  mu){
+      target += normal_lpdf( (y[n]-mu)/sigma2 | 0 , 1) + log(2) - log(sigma1 + sigma2);
+    }
+  }
+}
+
+generated quantities {
+} 
+```
+# References
+**References**
